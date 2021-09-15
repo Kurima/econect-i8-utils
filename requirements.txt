@@ -1,1 +1,2 @@
-digi-xbee==1.3.0
+digi-xbee==1.4.0
+requests
