@@ -17,7 +17,6 @@
 # along with econect-i8-utils.  If not, see <http://www.gnu.org/licenses/>.
 
 
-import logging
 import mmap
 import os
 from sys import argv
@@ -25,7 +24,7 @@ from typing import cast
 
 import requests
 
-from config import SERVER_URL
+from config import LOG_DIR, SERVER_URL
 from econect.protocol.I8TL import DataReceiver
 
 if __name__ == '__main__':
@@ -35,18 +34,13 @@ if __name__ == '__main__':
 	broker  : str = ""
 	port    : int = 0
 
-	logging.basicConfig(level=logging.NOTSET)
-
-	logging.getLogger("digi.xbee.devices").disabled = True
-	logging.getLogger("digi.xbee.sender").disabled = True
-	logging.getLogger("digi.xbee.reader").disabled = True
 	
 	if len(argv) > 1:
 		devfile = argv[1]
 	if len(argv) > 2:
 		file_to_send = argv[2]
 	
-	dr : DataReceiver = DataReceiver(path=devfile, speed=bauds, self_stop=True, del_dir=True, thread_inactive_time_limit=60)
+	dr : DataReceiver = DataReceiver(path=devfile, speed=bauds, self_stop=True, del_dir=True, log_dir=LOG_DIR, thread_inactive_time_limit=60)
 	
 	
 	try:

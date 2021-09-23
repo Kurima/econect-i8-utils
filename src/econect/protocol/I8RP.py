@@ -15,14 +15,13 @@
 # along with econect-i8-utils.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-
 from struct import pack
-from typing import Optional
+from typing import Optional, Union
 
 from digi.xbee.devices import XBee16BitAddress, XBee64BitAddress, XBeeDevice
 from digi.xbee.exception import TimeoutException
 
-from econect.protocol import I8TL
+import econect.protocol.I8TL as I8TL
 
 '''
 	I8RP : Resolution Protocol for IEEE 802.14.5
@@ -30,9 +29,9 @@ from econect.protocol import I8TL
 	 0              
 	 0 1 2 3 4 5 6 7
 	+-+-+-+-+-+-+-+-+
-	| P. ID | Reser.|
+	|  0xF  | Ignor.|
 	+-+-+-+-+-+-+-+-+
-	
+
 	This protocol allows to exchange IEEE 802.14.5 64 bit addresses
 	between an end device and its coordinator.
 
@@ -49,13 +48,10 @@ from econect.protocol import I8TL
 	set to 0.
 
 
-	Helpers functions `request_XBee64BitAddr` and `send_XBee64BitAddr`
-	are provided. 
-
 '''
 
+logger = logging.getLogger('i8-utils')
 
-i8rp_logger = logging.getLogger('I8RP')
 
 
 class I8RP_Trame:
@@ -74,7 +70,7 @@ class I8RP_Trame:
 
 	def __eq__(self, other : object) -> bool:
 		'''
-		Two I8RP trames are always equals.
+		Equality operator. Two I8RP trames are always equals.
 		'''
 		if not isinstance(other, I8RP_Trame):
 			return NotImplemented
@@ -97,39 +93,32 @@ class I8RP_Trame:
 		i8rp_trame._protocol_id = I8TL.Protocol_ID(byte_array[0])	
 		return i8rp_trame
 
+	def send(self, device : XBeeDevice, destination_addr : Union[XBee64BitAddress, XBee16BitAddress] = XBee16BitAddress.from_hex_string("0000"), retries : int = 1, timeout : int = 3) -> Optional[XBee64BitAddress]:
+		'''
+		Sends an I8RP Trame to `destination_addr` using `device` and waiting for a response
+		if needed in `timeout` seconds.
 
+		If an I8RP trame is received before running out of retries, the 64 bit address is extracted from the MAC Layer. Otherwise,
+		`None` is returned.
+		'''
+		coord64BitAddr = None
+		tries = 1
 
+		while coord64BitAddr is None and tries <= retries:
+			logger.info(f'[I8RP] Sending from: {device.get_64bit_addr()}. To: {destination_addr}.')
+			I8TL.i8tl_send_trame(device, destination_addr, self.to_bytes())
 
-def i8rp_request(device : XBeeDevice, retries : int = 3, timeout : int = 3) -> Optional[XBee64BitAddress]:
-	'''
-	Generate a request for the IEEE 802.14.5 64 bit address of the coordinator ("0000" 16 bit address) using 
-	the device `device` to communicate, trying `retries` times and each time waiting for a response in `timeout` seconds.
+			#If you use a 64 bit address, it's not a request, so no need to wait for response!
+			if isinstance(destination_addr, XBee64BitAddress):
+				break
+			try:
+				raw_response = device.read_data(timeout)
+				if raw_response is not None and (raw_response.data[0] & I8TL.Protocol_ID.I8RP.value) == I8TL.Protocol_ID.I8RP.value:				
+					coord64BitAddr = raw_response.remote_device.get_64bit_addr()
+					logger.info(f'[I8RP] Received response with address: {coord64BitAddr}.')
+			
+			except TimeoutException:
+				logger.warning(f"[I8RP] Response timeout")
+			tries+=1
 
-	If an I8RP trame is received before running out of retries, the 64 bit address is extracted from the MAC Layer. Otherwise,
-	 `None` is returned.
-	'''
-
-	coord64BitAddr = None
-	coord16BitAddr = XBee16BitAddress.from_hex_string("0000")
-
-	i8rp_request = I8RP_Trame().to_bytes()
-
-	while coord64BitAddr is None and retries > 0:
-		I8TL.i8tl_send_trame(device, coord16BitAddr, i8rp_request, i8rp_logger)
-		try:
-			raw_response = device.read_data(timeout)
-			if raw_response is not None and (raw_response.data[0] & I8TL.Protocol_ID.I8RP.value) == I8TL.Protocol_ID.I8RP.value:				
-				coord64BitAddr = raw_response.remote_device.get_64bit_addr()
-
-		except TimeoutException:
-			pass
-		retries-=1
-
-	return coord64BitAddr
-
-def i8rp_response(device : XBeeDevice, destination_addr : XBee64BitAddress) -> None:
-	'''
-	Generate a response for its own IEEE 802.14.5 64 bit address using the device `device` to communicate
-	to `destination_addr`.
-	'''
-	I8TL.i8tl_send_trame(device, destination_addr, I8RP_Trame().to_bytes(), i8rp_logger)
+		return coord64BitAddr

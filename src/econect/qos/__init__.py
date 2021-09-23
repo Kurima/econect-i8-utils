@@ -14,4 +14,4 @@
 # You should have received a copy of the GNU General Public License
 # along with econect-i8-utils.  If not, see <http://www.gnu.org/licenses/>.
 
-from .TrameCounter import TrameCounter
+from .Counter import DummyTrameCounter, FileTrameCounter, TrameCounter

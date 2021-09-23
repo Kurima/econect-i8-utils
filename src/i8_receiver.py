@@ -16,20 +16,19 @@
 # You should have received a copy of the GNU General Public License
 # along with econect-i8-utils.  If not, see <http://www.gnu.org/licenses/>.
 
-import logging
 import mmap
 import os
 from pathlib import Path
 from sys import argv
 from typing import cast
 
-from config import RECEIVED_FOLDER
+from config import RECEIVED_DIR
 from econect.formats import F8Wrapper, NeoCayenneLPP
 from econect.protocol.I8TL import DataReceiver
 
 
-def ensure_folder_exists(folder : str):
-		Path(folder).mkdir(parents=True, exist_ok=True)
+def ensure_dir_exists(dir_name : str):
+		Path(dir_name).mkdir(parents=True, exist_ok=True)
 
 def handle_neocayenne(neocayenne_trame : NeoCayenneLPP):
 	pass
@@ -37,8 +36,8 @@ def handle_neocayenne(neocayenne_trame : NeoCayenneLPP):
 
 
 def handle_f8wrapper(filename : str, data : bytes):
-	ensure_folder_exists(RECEIVED_FOLDER)
-	with open('/'.join([RECEIVED_FOLDER, filename]), 'wb') as f:
+	ensure_dir_exists(RECEIVED_DIR)
+	with open('/'.join([RECEIVED_DIR, filename]), 'wb') as f:
 		f.write(data)
 	
 	print(f'Saved {filename} file')
@@ -51,11 +50,6 @@ if __name__ == '__main__':
 	broker  : str = ""
 	port    : int = 0
 
-	logging.basicConfig(level=logging.NOTSET)
-
-	logging.getLogger("digi.xbee.devices").disabled = True
-	logging.getLogger("digi.xbee.sender").disabled = True
-	logging.getLogger("digi.xbee.reader").disabled = True
 	
 	if len(argv) > 1:
 		devfile = argv[1]

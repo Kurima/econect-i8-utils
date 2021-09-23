@@ -17,13 +17,12 @@
 # along with econect-i8-utils.  If not, see <http://www.gnu.org/licenses/>.
 
 
-import logging
 from sys import argv, exit
 from time import sleep
 from typing import Final
 
-from config import EXAMPLES_FILES, EXAMPLES_FOLDER
-from econect.formats import NeoCayenneLPP
+from config import EXAMPLES_DIR, EXAMPLES_FILES, LOG_DIR
+#from econect.formats import NeoCayenneLPP
 from econect.protocol.I8TL import DataSender
 
 TEMPERATURE_SENSOR_ID : Final[int] = -5
@@ -43,17 +42,13 @@ if __name__ == "__main__":
 	devfile : str = "/dev/ttyUSB0"
 	bauds   : int = 230400
 
-	logging.basicConfig(level=logging.NOTSET)
-	logging.getLogger("digi.xbee.devices").disabled = True
-	logging.getLogger("digi.xbee.sender").disabled = True
-	logging.getLogger("digi.xbee.reader").disabled = True
 	
 	if len(argv) > 1:
 		devfile = argv[1]
 	if len(argv) > 2:
 		file_to_send = argv[2]
 	
-	ds : DataSender = DataSender(path=devfile, speed=bauds, del_dir=True, self_stop=True, response_timeout=10, retries=3)
+	ds : DataSender = DataSender(path=devfile, speed=bauds, del_dir=True, self_stop=True, qos_info=True, log_dir=LOG_DIR, response_timeout=1, retries=3)
 	
 	try:
 		i : int = 0
@@ -64,8 +59,8 @@ if __name__ == "__main__":
 			# ds.notify_data_to_send(data.to_bytes())
 			# sleep(1)
 			
-			ds.notify_file_to_send(EXAMPLES_FOLDER + EXAMPLES_FILES[i])
+			ds.notify_file_to_send(EXAMPLES_DIR + EXAMPLES_FILES[i])
 			i = (i+1)%len(EXAMPLES_FILES)
-			sleep(60)
+			sleep(10)
 	except KeyboardInterrupt:
 		exit(0)

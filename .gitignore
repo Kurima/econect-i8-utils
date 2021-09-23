@@ -3,6 +3,7 @@
 *.sublime-project
 *.sublime-workspace
 
+src/log/
 src/config/
 src/example_files/
 src/received_files/
