@@ -1,3 +1,6 @@
 # Misc
 include LICENSE
 include requirements.txt
+include xctu-profiles/*
+include i8-forwarder.service
+include install-service.sh
