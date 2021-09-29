@@ -1,4 +1,4 @@
-	# Copyright (C) 2021  Malik Irain
+# Copyright (C) 2021  Malik Irain
 # This file is part of econect-i8-utils.
 #
 # econect-i8-utils is free software: you can redistribute it and/or modify

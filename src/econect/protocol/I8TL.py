@@ -28,7 +28,8 @@ from enum import Enum
 from functools import partial
 from logging import StreamHandler
 from logging.handlers import RotatingFileHandler
-from os import remove, stat
+from multiprocessing import Manager
+from os import remove, fstat
 from os.path import basename
 from pathlib import Path
 from shutil import copyfileobj, rmtree
@@ -99,6 +100,10 @@ from econect.protocol.I8TP import I8TP_Trame
 
 
 def i8tl_send_trame(device : XBeeDevice, destination_addr : Union[XBee16BitAddress,XBee64BitAddress], data : bytes) -> None:
+	'''
+	Sends provided `data` through `device` to `destination_addr` by handling
+	all exceptions that may arise. 
+	'''
 	try:
 		if isinstance(destination_addr, XBee16BitAddress):
 			device._send_data_16(destination_addr, data, TransmitOptions.DISABLE_ACK.value)			
@@ -128,27 +133,40 @@ def i8tl_send_trame(device : XBeeDevice, destination_addr : Union[XBee16BitAddre
 logger = logging.getLogger('i8-utils')
 
 def get_Protocol_ID(first_byte : int) -> Protocol_ID:
+	'''
+	Exctract the Protocol ID from the given byte
+	'''
 	return Protocol_ID(first_byte & 0xF0)
 
-def _get_chunk_count(filename : str) -> int:
-	size = stat(filename).st_size
+def _get_chunk_count(fileno : int) -> int:
+	'''
+	Count how much chunks of `PAYLOAD_MAX_LEN` 
+	will be made with a file from its `fileno`.
+	'''
+	size = fstat(fileno).st_size
 	chunk_count = (size + I8DP_Trame.PAYLOAD_MAX_LEN - 1)//I8DP_Trame.PAYLOAD_MAX_LEN
-
-	logger.info(f'[I8TL] {chunk_count} chunks are needed to send {filename}')
 
 	return chunk_count
 
 
 def _prepare_logger(base_log_level : int, log_dir : str, filename : str):
+	'''
+	Create ;
+		- a rotating logger file that catches all whose location depends 
+		 on `log_dir` and `filename`
+		- a stream logger on stderr set a `base_log_level` level.
+
+	Also disables digi.xbee loggers and urllib3.connectionpool
+	'''
 	rfh = RotatingFileHandler(f'{log_dir}/{time.time_ns()}-i8_{filename}.log', maxBytes=65536,backupCount=1)
 	rfh.setLevel(logging.NOTSET)
 
 	sh = StreamHandler()
 	sh.setLevel(base_log_level)
 
-	#logger.setLevel(logging.NOTSET)
-	#logger.addHandler(rfh)
-	#logger.addHandler(sh)
+	# logger.setLevel(logging.NOTSET)
+	# logger.addHandler(rfh)
+	# logger.addHandler(sh)
 
 	logging.basicConfig(level=logging.NOTSET, handlers=[rfh, sh])
 
@@ -177,11 +195,14 @@ class DataSender(metaclass=Singleton):
 		base_log_level   : int              = logging.NOTSET):
 		
 
+		# Create log dir if not existing
 		self._log_dir = log_dir + '/' 
 		Path(self._log_dir).mkdir(parents=True, exist_ok=True)
 
 		_prepare_logger(base_log_level, self._log_dir, 'datasender')
 		
+
+		# Create tmp dir if not existing
 		self._tmp_dir = tmp_dir + '/' 
 		Path(self._tmp_dir).mkdir(parents=True, exist_ok=True)
 
@@ -190,23 +211,95 @@ class DataSender(metaclass=Singleton):
 		self._retries = retries
 		self._response_timeout = response_timeout
 		self._delta_lifetime = -1
-		self._timestamp_delta = 0
+		self._timestamp_delta = Manager().Value('i', 0)
 
 		self._queue           : multiprocessing.Queue             = multiprocessing.Queue()
 		self._stop_event      : multiprocessing.synchronize.Event = multiprocessing.Event()
 		self._xbee_init_event : multiprocessing.synchronize.Event = multiprocessing.Event()
 
 		
+
+		# Count trames and retranmission if qos_info is enabled, otherwise use a dummy counter
 		self._trame_counter   : TrameCounter = FileTrameCounter(f'{self._log_dir}{time.time_ns()}-retransmissions.log') if qos_info else DummyTrameCounter()
 
 		if self_stop:
 			atexit.register(self.stop)
 		
+
+		# Start the sending process
 		self._process = multiprocessing.Process(target=self.__run, args=(path, speed, coord_addr))
 		self._process.start()
 
 
-	def _init_device_coord_addr_and_timestamp_delta(self,  path: str, speed: int, coord_addr : XBee64BitAddress):	
+	@property
+	def timestamp_delta(self):
+		'''
+		Returns the delta with server clock
+		'''
+		return self._timestamp_delta.value
+	
+	@property
+	def timestamp(self) -> int:
+		'''
+		Returns the current timestamp plus delta
+		'''
+		return time.time_ns() + self.timestamp_delta
+
+		
+
+	def notify_data_to_send(self, data: bytes) -> None:
+		'''
+		Notify the data sender process that  new data is to be send.
+		Data is saved in a temporary location in form of a file.
+		'''
+		self._xbee_init_event.wait()
+
+		filename = self._tmp_dir + str(time_ns()) + '-' + data.hex()[-8:] + ".bin"
+
+		with open(filename, 'wb') as file:
+			file.write(data)
+
+		self._queue.put(filename)
+		logger.info(f'[I8TL] DataSender received a notification for {filename} (data)')
+
+	def notify_file_to_send(self, filename: str) -> None:
+		'''
+		Notify the data sender process that a new file is to be send.
+		The file is encapsulated in a F8Wrapper and saved in a temporary
+		location, allowing to keep its filename through the transfert.
+		'''
+		self._xbee_init_event.wait()
+
+		new_filename = self._tmp_dir + str(time_ns()) + '-' + basename(filename) + ".bin"
+
+		with F8Wrapper(filename, 'rb') as fsrc, open(new_filename, 'wb') as fdst:
+			copyfileobj(fsrc, fdst)
+		
+		self._queue.put(new_filename)
+		logger.info(f'[I8TL] DataSender received a notification for {filename} (file)')
+
+	def is_sending(self) -> bool:
+		'''
+		Returns True if the sender queue is empty, False otherwise.
+		Result correctness is not guaranteed.
+		'''
+		return not self._queue.empty()
+	
+
+	def stop(self) -> None:
+		'''
+		Notify the process to stop and wait for it
+		to do it (after it finished its transfert)
+		'''
+		logger.info("[I8TL] Exiting. Waiting for DataSender process to stop.")
+		self._stop_event.set()
+		self._process.join()
+		
+
+	def _init_device_coord_addr_and_timestamp_delta(self,  path: str, speed: int, coord_addr : XBee64BitAddress):
+		'''
+		Open the XBeeDevice, get the 64 bit address of the coordinator and sync the clock by
+		'''
 		self._device = XBeeDevice(path, speed)
 		self._device.open()
 		self._device.set_sync_ops_timeout(None)
@@ -229,43 +322,51 @@ class DataSender(metaclass=Singleton):
 
 		logger.info(f'[I8TL] Coordinator 64 bits address: {self._coord_addr}')
 		
-		self._update_timestamp_delta(validity_in_hours=1)
+		self._update_timestamp_delta()
 		self._xbee_init_event.set()
 
 	def _timestamp_delta_is_valid(self):
+		'''
+		Checks if the timestamp delta is still valid
+		(its lifetime is not expired)
+		'''
 		return time.time_ns() <= self._delta_lifetime
 
-	def _update_timestamp_delta(self, validity_in_hours : int=0):
+	def _update_timestamp_delta(self, validity_in_hours : int=24):
+		'''
+		Update timestamp
+		'''
 		delta_list = []
 		for _ in range(10):
 			delta = I8TP_Trame().send(self._device, self._coord_addr, timeout=self._response_timeout)
 			if delta is not None:
 				delta_list.append(delta)
-		self._timestamp_delta = round(statistics.mean(delta_list)) 
+		self._timestamp_delta.value = round(statistics.mean(delta_list)) 
 
 		if validity_in_hours == 0:
-			#Valid "forever" (2554-07-22 01:34:33.709553)
+			# Valid "forever" (2554-07-22 01:34:33.709553)
 			self._delta_lifetime = 2**64
 		else:
-			#convert hours to ns. Valid but leap seconds introduce a slow shift
+			# convert hours to ns. Valid but leap seconds introduce a slow shift
 			self._delta_lifetime = time.time_ns() + validity_in_hours * int(3.6e+12) 
-		logger.info(f'[I8TL] Got new timestamp_delta ({self._timestamp_delta}), valid until {datetime.fromtimestamp(self._delta_lifetime*1e-9)}')
-	
-
-	def stop(self) -> None:
-		logger.info("[I8TL] Exiting. Waiting for DataSender process to stop.")
-		self._stop_event.set()
-		self._process.join()
-		
-
-		
-
+		logger.info(f'[I8TL] Got new timestamp_delta ({self._timestamp_delta.value}), valid until {datetime.fromtimestamp(self._delta_lifetime*1e-9)}')
 
 
 	def _resend_chunks(self, trames_to_resend : List[I8DP_Trame]) -> bool:
+		'''
+		Individualy resend the trames that weren't acknowledged (`trames_to_send`)
+		waiting for individual acknowledgements.
+
+		Returns True if everything was send and acknowledged, False otherwise.
+		'''
 		logger.info(f'[I8TL] Trying to resend {len(trames_to_resend)} trames.')
+
+		# No `for .. in` loop because trames_to_resend may be
+		# modified in the loop (some elements may receive a late ACK)
 		while len(trames_to_resend) > 0:
 			ack = False
+			
+			# All trames should be individualy acknowledged
 			a_trame = trames_to_resend[0]
 			a_trame.set_needs_ack()
 			tries = 1
@@ -274,11 +375,18 @@ class DataSender(metaclass=Singleton):
 				i8dp_ack = a_trame.send(self._device, self._coord_addr, timeout=self._response_timeout)
 				self._trame_counter.inc_retrans()
 				if i8dp_ack is not None:
+					# Sequence number of trames are retrieved in `ack_list`
+					# The intersection between this list and the sequence numbers
+					# `trames_to_resend` are to be removed
 					ack_list = [i8dp_ack.seq] + i8dp_ack.ack_list
 					trames_to_remove = list(set(ack_list) & set(trames_to_resend))
 					logger.info(f'[I8TL] Trames {trames_to_remove} correctly acknowledged.')
 					ack = True
+
+
 					for a_trame_to_remove in trames_to_remove:
+						# It can fail if the same sequence number appears several times...
+						# But it shouldn't and is not so problematic!
 						try:
 							trames_to_resend.remove(cast(I8DP_Trame, a_trame_to_remove))
 						except ValueError as ve:
@@ -293,73 +401,107 @@ class DataSender(metaclass=Singleton):
 
 
 
-	def _send_file(self, file : IO[bytes], chunk_count : int) -> bool:
+	def _send_file(self, file : IO[bytes]) -> bool:
+		'''
+		The method to send an already opened `file`
+
+		Returns True when a file was fully sent, False otherwise.
+		'''
+		chunk_count = _get_chunk_count(file.fileno())
+		logger.info(f'[I8TL] {chunk_count} chunks are needed to send {file.name}')
+		
 		trames_sent : List[I8DP_Trame] = []	
+
+		# Each transmission should start by a RST trame!
+		# And receive a RST trame in return
 		reset = False
 		while not reset:
+			logger.info('[I8TL] Sending RST Trame.')
 			i8dp_rst_ack = I8DP_Trame.rst_trame().send(self._device, self._coord_addr, timeout=self._response_timeout)
 			reset = (i8dp_rst_ack is not None) and i8dp_rst_ack.is_rst
 
 		for i, chunk in enumerate(iter(partial(file.read, I8DP_Trame.PAYLOAD_MAX_LEN), b''), 1):
-			more_fragments = (i != chunk_count)
-	
+			# Building a trame around a chunk:
+			#  - BEGIN is set for the first sent trame and not set otherwise
+			#  - MORE_FRAG is set for the last sent trame and not set otherwise
+			#  - NEED_ACK is set in one of the following cases:
+			# 	 - It is the last trame of a burst (`BURST_MAX_LEN` trames sent without ACK)
+			#     - It is the last trame to end the transfert
+			#     - Its sequence number is the last one before going back to 0 (So that the 
+			# 	   ordering stays ok, on the receiver side (0 < 255 but Trame 0 may follow Trame 255))
 			trame = I8DP_Trame.data_trame(chunk, begin=(i == 1), need_ack=((i%I8DP_Trame.BURST_MAX_LEN == 0) or (i == chunk_count)), more_fragments=(i != chunk_count))
-
 			if trame.seq == (I8DP_Trame.SequenceGenerator.LIMIT - 1):
 				trame.set_needs_ack()
 
-			
-			logger.info(f'[I8TL] Trying to send chunk {i} of {chunk_count} with seq: {trame.seq}, need_ack:{trame.needs_ack} and more_fragments:{trame.more_frag}')
+			logger.info(f'[I8TL] Trying to send chunk {i} of {chunk_count} with in trame [#SEQ:{trame.seq},NEEDS_ACK:{trame.needs_ack},MORE_FRAG:{trame.more_frag}]')
 			i8dp_ack = trame.send(self._device, self._coord_addr, timeout=self._response_timeout)
+			
 			self._trame_counter.inc_send()
+			
 			if not trame.needs_ack:
 				trames_sent.append(trame)
 			else:
+				# When a trame needs ACK, i8dp_ack should not be empty!
+				# If it is, we resend everything from the beginning of the
+				# burst and the current trame: we know the current trame
+				# may not have been received (because no ACK were received)
+				# and we don't know which other trames were not received.
 				to_resend = []
 				if i8dp_ack is None:
 					to_resend = trames_sent
 					to_resend.append(trame)
-					logger.warning(f'[I8TL] ACK for trame {trame.seq} and {len(trames_sent)} previous trames is needed but was not received.')
+					logger.warning(f'[I8TL] Acknowledgment for trames {[trame.seq] + [trame.seq for trame in trames_sent]} is needed but was not received.')
 				else:
-					# The trames to send again are the ones sent in the last burst but didn't receive an ack flag
-					# So they are the trames that are in trames_sent but not in the list of ack from the ack trame
+					# The trames to resend again are the ones sent in the last burst
+					# that were not included in this acknowledgement.
 					to_resend = [trames_sent[j] for j in range(len(trames_sent)) if trames_sent[j].seq not in i8dp_ack.ack_list]
 					if to_resend:
-						logger.warning(f'[I8TL] ACK for trame {trame.seq} and {len(trames_sent)} previous trames is needed but was partially received ({len(to_resend)} trames were not ACKd)')
+						logger.warning(f'Acknowledgment for trames {[trame.seq] + [trame.seq for trame in trames_sent]} is needed but was partially received (Trames {[trame.seq for trame in to_resend]} will be resend)')
 					else:
-						logger.info(f'[I8TL] ACK for trame {trame.seq} and {len(trames_sent)} previous trames is needed  and was succesfuly received.')
-			
+						logger.info(f'[I8TL] Acknowledgment for trames {[trame.seq] + [trame.seq for trame in trames_sent]} was succesfuly received.')
+				
 				sent = self._resend_chunks(to_resend)
+				
 				if not sent:
 					return False
 				trames_sent = []
-
-
 		return True
 		
-
 	def __run(self, path : str, speed : int, coord_addr : XBee64BitAddress):
+		'''
+		Starting point of the internal subprocess.
+
+		It handles getting the temporary filenames, opening and sending them.
+		'''
 		if multiprocessing.parent_process() is None:
 			logger.error("[I8TL]Tried to call run() method from main process.")
 			return
 		
 		logger.info("[I8TL] DataSender process created")
 		
+		# SIGINT is disabled to handle termination in a proper way
 		signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 		self._init_device_coord_addr_and_timestamp_delta(path=path, speed=speed, coord_addr=coord_addr)
+
+		# To quit we need to wait for the `stop()` method to have been
+		# called and set `_stop_event`
 		while not self._stop_event.is_set():
 			if not self._timestamp_delta_is_valid():
-				self._update_timestamp_delta(validity_in_hours=1)
+				self._update_timestamp_delta()
 			try:
 				file_sent = False
+
+				# The timeout is here so the loop can check
+				# for `_stop_event` event when `_queue` is empty
 				filename = self._queue.get(timeout=1)
 				logger.info(f'[I8TL] Trying to send {filename}')
 						
 				with open(filename, 'rb') as file:
-					chunk_count = _get_chunk_count(filename)
-					file_sent = self._send_file(file, chunk_count)	
+					file_sent = self._send_file(file)	
 				
+				# When a file is sent, we remove it's temporary version
+				# otherwise we will try to send it again later ...
 				if file_sent:	
 					logger.info(f'[I8TL] Sent file {filename}')
 					remove(filename)
@@ -368,42 +510,18 @@ class DataSender(metaclass=Singleton):
 					logger.warning(f'[I8TL] Could not send {filename}, putting it back into the queue.')
 					self._queue.put(filename)
 			except queue.Empty:
+				# When timeout expired, nothing to worry about
 				pass
 				
 		logger.info("[I8TL] DataSender process exiting")
 		
+		# cleaning up data and device when exiting
 		if self._del_dir:
 			logger.info(f"[I8TL] Recursively removing temporary folder and files (in {self._tmp_dir})")
 			rmtree(self._tmp_dir, ignore_errors=True)
 
 		self._device.close()
-		
 
-	def notify_data_to_send(self, data: bytes) -> None:
-		self._xbee_init_event.wait()
-
-		filename = self._tmp_dir + str(time_ns()) + '-' + data.hex()[-8:] + ".bin"
-
-		with open(filename, 'wb') as file:
-			file.write(data)
-
-		self._queue.put(filename)
-		logger.info(f'[I8TL] DataSender received a notification for {filename} (data)')
-
-	def notify_file_to_send(self, filename: str) -> None:
-		self._xbee_init_event.wait()
-
-		new_filename = self._tmp_dir + str(time_ns()) + '-' + basename(filename) + ".bin"
-
-		with F8Wrapper(filename, 'rb') as fsrc, open(new_filename, 'wb') as fdst:
-			copyfileobj(fsrc, fdst)
-		
-		self._queue.put(new_filename)
-		logger.info(f'[I8TL] DataSender received a notification for {filename} (file)')
-
-
-	def is_sending(self) -> bool:
-		return not self._queue.empty()
 
 class DataReceiver(metaclass=Singleton):
 
@@ -430,8 +548,8 @@ class DataReceiver(metaclass=Singleton):
 
 		@staticmethod
 		def __run_send_responses(device : XBeeDevice, stop_event : threading.Event, responses_trames_queue : queue.Queue):
-			#logger = logging.getLogger('ResponderThread')
-			#should change logger output
+			# logger = logging.getLogger('ResponderThread')
+			# should change logger output
 			while not stop_event.is_set():
 				try:
 					i8tl = responses_trames_queue.get(timeout=1)
@@ -456,8 +574,8 @@ class DataReceiver(metaclass=Singleton):
 			chunks_to_write : List[bytes] = []
 			should_end : bool = False
 
-			#logger = logging.getLogger(f'DataReceiver@{threading.currentThread().getName()}')
-			#Change logger output
+			# logger = logging.getLogger(f'DataReceiver@{threading.currentThread().getName()}')
+			# Change logger output
 			logger.info("Starting thread because a message was received.")
 			while not stop_event.is_set() or transmission_in_progress:
 				try:
@@ -479,7 +597,7 @@ class DataReceiver(metaclass=Singleton):
 							i8dp_trame = I8DP_Trame.from_bytes(data['data'])
 
 							ignore_trame = False
-							#if it's an ack we ignore it
+							# if it's an ack we ignore it
 							if i8dp_trame.is_rst:
 								transmission_in_progress = False
 								logger.info(f"[I8DP] Received RST Trame. Sending RST back.")
@@ -506,7 +624,7 @@ class DataReceiver(metaclass=Singleton):
 										seq_ack_list = []
 										should_end = False
 
-										#this shouldn't happen ...
+										# this shouldn't happen ...
 										if current_file is not None:
 											current_file.close()
 											remove(current_file.name)
@@ -514,26 +632,26 @@ class DataReceiver(metaclass=Singleton):
 										current_filename = tmp_dir + str(time_ns()) + '-' + data['from'].address.hex() + '-' + i8dp_trame.data.hex()[-8:] + ".bin"
 										current_file = open(current_filename, 'wb')
 
-								#To make things easy, if the first one is lost we ignore the rest
-								#Because it could cause
+								# To make things easy, if the first one is lost we ignore the rest
+								# Because it could cause
 								if not transmission_in_progress:
 									logger.info("[I8DP] Ignored because no trame with BEGIN flag was received.")
 									ignore_trame = True
 								elif i8dp_trame.seq < expected_seq or (expected_seq in RANGE_0_BURST_MAX_LEN and i8dp_trame.seq in RANGE_LIMIT_BURST_MAX_LEN):
 									logger.info(f"[I8DP] Ignored because sequence number is smaller than expected ({i8dp_trame.seq} < {expected_seq}).")
 									ignore_trame = True
-								# elif (i8dp_trame.seq >= (expected_seq + I8DP_Trame.BURST_MAX_LEN)%I8DP_Trame.SequenceGenerator.LIMIT) !=   (i8dp_trame.seq <=  expected_seq - I8DP_Trame.BURST_MAX_LEN):
-								# 	logger.info(f"[I8DP] Ignored because sequence number is not in burst ({i8dp_trame.seq} ]{expected_seq - I8DP_Trame.BURST_MAX_LEN},{expected_seq + I8DP_Trame.BURST_MAX_LEN}[).")
-								# 	ignore_trame = True
+								#  elif (i8dp_trame.seq >= (expected_seq + I8DP_Trame.BURST_MAX_LEN)%I8DP_Trame.SequenceGenerator.LIMIT) !=   (i8dp_trame.seq <=  expected_seq - I8DP_Trame.BURST_MAX_LEN):
+								#  	logger.info(f"[I8DP] Ignored because sequence number is not in burst ({i8dp_trame.seq} ]{expected_seq - I8DP_Trame.BURST_MAX_LEN},{expected_seq + I8DP_Trame.BURST_MAX_LEN}[).")
+								#  	ignore_trame = True
 
 								if not ignore_trame and i8dp_trame not in fragment_burst:
 									bisect.insort(fragment_burst, i8dp_trame)
-									#fragment_burst.append(i8dp_trame)
+									# fragment_burst.append(i8dp_trame)
 									seq_ack_list.append(i8dp_trame.seq)
-								#seq_list = [frag.seq for frag in fragment_burst]  
-								#logger.error(f"seq_list [before]: {seq_list}")
+								# seq_list = [frag.seq for frag in fragment_burst]  
+								# logger.error(f"seq_list [before]: {seq_list}")
 								if transmission_in_progress and i8dp_trame.needs_ack:
-									#When it's a packet that needs ack we send it with all the previous ones
+									# When it's a packet that needs ack we send it with all the previous ones
 									logger.info(f"[I8DP] Trame {i8dp_trame.seq} needs ACK, sending it for {seq_ack_list}.")
 									responses_trames_queue.put({'trame' : I8DP_Trame.ack_trame(i8dp_trame.seq, seq_ack_list), 'to' : data['from']})
 									seq_ack_list = []
@@ -541,7 +659,7 @@ class DataReceiver(metaclass=Singleton):
 								while not ignore_trame and (fragment_burst and fragment_burst[0] == expected_seq):
 									logger.info(f"[I8DP] Writing trame {fragment_burst[0].seq} data to temporary storage.")
 									chunks_to_write.append(fragment_burst.pop(0).data)
-									#seq_list.pop(0)
+									# seq_list.pop(0)
 									expected_seq = (expected_seq + 1)%I8DP_Trame.SequenceGenerator.LIMIT
 									
 								logger.info(f"[I8DP] Next trame should be {expected_seq}.")
@@ -549,7 +667,7 @@ class DataReceiver(metaclass=Singleton):
 								if current_file is not None:
 									current_file.write(b''.join(chunks_to_write))
 									chunks_to_write = []
-									#	logger.error(f"seq_list [after ]: {seq_list}")
+									# 	logger.error(f"seq_list [after ]: {seq_list}")
 									
 
 								
@@ -565,7 +683,7 @@ class DataReceiver(metaclass=Singleton):
 									transmission_in_progress = False
 									assembled_data_queue.put(current_filename)
 					except ValueError:
-						#Invalid protocolID, pass
+						# Invalid protocolID, pass
 						pass
 				except queue.Empty:
 					elapsed_time_without_trame += 1
@@ -687,5 +805,5 @@ class DataReceiver(metaclass=Singleton):
 		self._device.close()
 
 
-	def get_data_filename(self) -> Any:
+	def get_data_filename(self) -> str:
 		return self._queue.get()
