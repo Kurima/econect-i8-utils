@@ -1,0 +1,17 @@
+[Unit]
+Description=IEEE 802.15.4 Forwarder
+After=network-online.target
+ 
+[Service]
+Type=simple
+ 
+User=i8utils
+Group=i8utils
+ 
+ExecStart=python3 /home/i8utils/i8_forwarder.py
+ 
+Restart=on-failure
+ 
+ 
+[Install]
+WantedBy=multi-user.target
