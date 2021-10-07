@@ -1,0 +1,1 @@
+SUBSYSTEMS=="usb", KERNEL=="ttyUSB*", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", TAG+="systemd", ENV{SYSTEMD_WANTS}+="i8-forwarder@%k.service"

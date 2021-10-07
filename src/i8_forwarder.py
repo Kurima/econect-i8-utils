@@ -46,7 +46,6 @@ if __name__ == '__main__':
 	try:
 		while True:
 			filename = dr.get_data_filename()
-			print("in main : ", filename)
 			with open(filename, 'rb') as file:
 				with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mm:
 					r = requests.post(SERVER_URL, 

@@ -7,11 +7,9 @@ Type=simple
  
 User=i8utils
 Group=i8utils
- 
-ExecStart=python3 /home/i8utils/i8_forwarder.py
+
+WorkingDirectory=/home/i8utils 
+ExecStart=/usr/bin/python3.8 /home/i8utils/i8_forwarder.py /dev/%i 
  
 Restart=on-failure
- 
- 
-[Install]
-WantedBy=multi-user.target
+RestartSec=5

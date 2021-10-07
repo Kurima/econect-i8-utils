@@ -54,7 +54,6 @@ class Protocol_ID(Enum):
 	I8RP = 0xF0
 
 
-
 from econect.protocol.I8DP import I8DP_Trame
 from econect.protocol.I8RP import I8RP_Trame
 from econect.protocol.I8TP import I8TP_Trame
@@ -75,9 +74,13 @@ from econect.protocol.I8TP import I8TP_Trame
 			path.
 
 	In any case, notified data is stored in a temporary file before beeing sent.
-
 	
-	The second one is the `DataReceiver` class that allos user to easily receive
+	Also, two methods to get server-side time are provided:
+			- timestamp      : to get a timestamp of server-side time
+			- timestamp_delta: to get the delta to add to a local timestamp
+			 in order to get server-side time
+	
+	The second one is the `DataReceiver` class that allows user to easily receive
 	data over an IEEE 802.15.4 link, using digi XBee modules.
 
 	For that, one method is available:
@@ -87,7 +90,7 @@ from econect.protocol.I8TP import I8TP_Trame
 	In can be denoted that this class starts a new thread for each `connection`
 	from new devices and stops them after a while if no data was transmitted.
 
-	Both classes are Singletons (because of the shared XBeeDevice resource),so all 
+	Both classes are Singletons (because of the shared XBeeDevice resource), so all 
 	instances are in fact the same. Be carefull, arguments given to the constructor
 	are only used on the first 'nstanciation. A user can 'instanciate' one like a 
 	normal object, but it will always be the same. These classes also contain a 
@@ -97,7 +100,7 @@ from econect.protocol.I8TP import I8TP_Trame
 
 '''
 
-
+logger = logging.getLogger('i8-utils')
 
 def i8tl_send_trame(device : XBeeDevice, destination_addr : Union[XBee16BitAddress,XBee64BitAddress], data : bytes) -> None:
 	'''
@@ -127,16 +130,12 @@ def i8tl_send_trame(device : XBeeDevice, destination_addr : Union[XBee16BitAddre
 		logger.error('[I8TL] Device communication interface is closed (maybe unplugged?).')
 		logger.error(f'[I8TL] {xe}')
 
-
-
-
-logger = logging.getLogger('i8-utils')
-
 def get_Protocol_ID(first_byte : int) -> Protocol_ID:
 	'''
 	Exctract the Protocol ID from the given byte
 	'''
 	return Protocol_ID(first_byte & 0xF0)
+
 
 def _get_chunk_count(fileno : int) -> int:
 	'''
@@ -148,10 +147,9 @@ def _get_chunk_count(fileno : int) -> int:
 
 	return chunk_count
 
-
 def _prepare_logger(base_log_level : int, log_dir : str, filename : str):
 	'''
-	Create ;
+	Creates
 		- a rotating logger file that catches all whose location depends 
 		 on `log_dir` and `filename`
 		- a stream logger on stderr set a `base_log_level` level.
@@ -175,7 +173,31 @@ def _prepare_logger(base_log_level : int, log_dir : str, filename : str):
 	logging.getLogger("digi.xbee.reader").disabled = True
 	logging.getLogger("urllib3.connectionpool").disabled = True
 
+
 class DataSender(metaclass=Singleton):
+	'''
+	The`DataSender` is a class that allows users to easily send 
+	data over an IEEE 802.15.4 link, using digi XBee modules.
+
+	For that, two methods are available:
+			- notify_data_to_send: to send raw bytes data, in a known format
+			 for the receiver (e.g. NeoCayenneLPP).
+
+			- notify_file_to_send: to send a file stored on the drive by giving its
+			path.
+
+	In any case, notified data is stored in a temporary file before beeing sent.
+
+	Also, two methods to get server-side time are provided:
+			- timestamp      : to get a timestamp of server-side time
+			- timestamp_delta: to get the delta to add to a local timestamp
+			 in order to get server-side time.
+
+
+	This class is a Singleton, all arguments given to the constructor are
+	only taken into consideration while building the first instance.
+
+	'''
 	__slots__ = ('_process', '_device', '_coord_addr', '_queue', 
 		'_stop_event', '_xbee_init_event', '_tmp_dir', '_log_dir',
 		'_del_dir', '_retries', '_response_timeout','_timestamp_delta',
@@ -195,14 +217,14 @@ class DataSender(metaclass=Singleton):
 		base_log_level   : int              = logging.NOTSET):
 		
 
-		# Create log dir if not existing
+		# Create log dir if it does not exists
 		self._log_dir = log_dir + '/' 
 		Path(self._log_dir).mkdir(parents=True, exist_ok=True)
 
 		_prepare_logger(base_log_level, self._log_dir, 'datasender')
 		
 
-		# Create tmp dir if not existing
+		# Create tmp dir if it does not exists
 		self._tmp_dir = tmp_dir + '/' 
 		Path(self._tmp_dir).mkdir(parents=True, exist_ok=True)
 
@@ -230,7 +252,6 @@ class DataSender(metaclass=Singleton):
 		self._process = multiprocessing.Process(target=self.__run, args=(path, speed, coord_addr))
 		self._process.start()
 
-
 	@property
 	def timestamp_delta(self):
 		'''
@@ -243,9 +264,7 @@ class DataSender(metaclass=Singleton):
 		'''
 		Returns the current timestamp plus delta
 		'''
-		return time.time_ns() + self.timestamp_delta
-
-		
+		return time.time_ns() + self.timestamp_delta	
 
 	def notify_data_to_send(self, data: bytes) -> None:
 		'''
@@ -285,7 +304,6 @@ class DataSender(metaclass=Singleton):
 		'''
 		return not self._queue.empty()
 	
-
 	def stop(self) -> None:
 		'''
 		Notify the process to stop and wait for it
@@ -351,7 +369,6 @@ class DataSender(metaclass=Singleton):
 			self._delta_lifetime = time.time_ns() + validity_in_hours * int(3.6e+12) 
 		logger.info(f'[I8TL] Got new timestamp_delta ({self._timestamp_delta.value}), valid until {datetime.fromtimestamp(self._delta_lifetime*1e-9)}')
 
-
 	def _resend_chunks(self, trames_to_resend : List[I8DP_Trame]) -> bool:
 		'''
 		Individualy resend the trames that weren't acknowledged (`trames_to_send`)
@@ -398,8 +415,6 @@ class DataSender(metaclass=Singleton):
 			if not ack:
 				return False
 		return True
-
-
 
 	def _send_file(self, file : IO[bytes]) -> bool:
 		'''
@@ -474,7 +489,7 @@ class DataSender(metaclass=Singleton):
 		It handles getting the temporary filenames, opening and sending them.
 		'''
 		if multiprocessing.parent_process() is None:
-			logger.error("[I8TL]Tried to call run() method from main process.")
+			logger.error("[I8TL]Tried to call DataSender's run method from main process.")
 			return
 		
 		logger.info("[I8TL] DataSender process created")
@@ -515,20 +530,35 @@ class DataSender(metaclass=Singleton):
 				
 		logger.info("[I8TL] DataSender process exiting")
 		
-		# cleaning up data and device when exiting
+		# Cleaning up data and device when exiting
 		if self._del_dir:
 			logger.info(f"[I8TL] Recursively removing temporary folder and files (in {self._tmp_dir})")
 			rmtree(self._tmp_dir, ignore_errors=True)
 
 		self._device.close()
 
-
 class DataReceiver(metaclass=Singleton):
+	'''
+	The `DataReceiver` class  allows user to easily receive	data over 
+	an IEEE 802.15.4 link, using digi XBee modules.
 
+	For that, one method is available:
+			- get_data_filename: gives the user a filename to be opened contained
+			reassembled received data.
+	
+	In can be denoted that this class starts a new thread for each `connection`
+	from new devices and stops them after a while if no data was transmitted.
+
+
+	This class is a Singleton, all arguments given to the constructor are
+	only taken into consideration while building the first instance.
+
+	'''
 	class ReceiverThreadPool():
+
 		__slots__ = ('_tmp_dir', '_inactive_time_limit', '_threads', '_thread_stop_events',
 			'_thread_trame_reception_queues', '_assembled_data_queue', '_notify_lock',
-			 '_responses_trames_queue', '_ack_thread_stop_event', '_ack_thread')
+			 '_responses_trames_queue', '_responses_thread_stop_event', '_responses_thread')
 
 		def __init__(self, device : XBeeDevice, assembled_data_queue : queue.Queue, tmp_dir : str, inactive_time_limit : int):
 			self._tmp_dir = tmp_dir
@@ -536,30 +566,92 @@ class DataReceiver(metaclass=Singleton):
 			self._notify_lock = threading.Lock()
 			self._assembled_data_queue = assembled_data_queue
 
+			# The receiving threads and their notification means (created on demand but initialized)
 			self._threads : Dict[XBee64BitAddress, threading.Thread] = {}
 			self._thread_stop_events : Dict[XBee64BitAddress, threading.Event] = {}
 			self._thread_trame_reception_queues : Dict[XBee64BitAddress, queue.Queue] = {}
 
+			#The responding thread and its notification means (created!)
 			self._responses_trames_queue : queue.Queue = queue.Queue()
-			self._ack_thread_stop_event : threading.Event = threading.Event()
-			self._ack_thread : threading.Thread = threading.Thread(target=DataReceiver.ReceiverThreadPool.__run_send_responses, args=(device, self._ack_thread_stop_event, self._responses_trames_queue))
+			self._responses_thread_stop_event : threading.Event = threading.Event()
+			self._responses_thread : threading.Thread = threading.Thread(target=DataReceiver.ReceiverThreadPool.__run_send_responses, args=(device, self._responses_thread_stop_event, self._responses_trames_queue))
 
-			self._ack_thread.start()
+			self._responses_thread.start()
+
+		def notify_trame(self,  trame : dict) -> None:
+			'''
+			When a trame is received, this method is called 
+			with it. It try to find a corresponding alive
+			thread or create it. 
+
+			A 'corresponding' thread is a thread that handles
+			trames from a specific sender.
+
+			Then the thread is notified with the trame.
+			'''
+
+			logger.info("[I8TL][Pool] Data to dispatch received.")
+			sender = trame['from']
+			with self._notify_lock:
+				if sender not in self._threads or not self._threads[sender].is_alive():
+					logger.warning(f"[I8TL][Pool] Thread [{sender}] was not found or is dead. Creating a new one.")
+					self._thread_trame_reception_queues[sender] = queue.Queue()
+					self._thread_stop_events[sender] = threading.Event()
+					self._threads[sender] = threading.Thread(target=DataReceiver.ReceiverThreadPool.__run, args=(self._tmp_dir, self._inactive_time_limit, self._thread_stop_events[sender], self._thread_trame_reception_queues[sender], self._assembled_data_queue, self._responses_trames_queue))
+					self._threads[sender].name = f'{sender}'
+					self._threads[sender].start()
+				self._thread_trame_reception_queues[sender].put(trame)
+
+		def stop(self):
+			'''
+			Notify all the threads to stop and wait for them
+			to do it.
+			'''
+
+			logger.info("[I8TL][Pool] Waiting for the threads to stop.")
+		
+			# Set all events, then wait for the threads to finish
+			for an_event in self._thread_stop_events.values():
+				an_event.set()
+
+			for a_thread in self._threads.values():
+				a_thread.join()
+
+			#Same thing but with the thread sending responses
+			self._responses_thread_stop_event.set()
+			self._responses_thread.join()
 
 		@staticmethod
 		def __run_send_responses(device : XBeeDevice, stop_event : threading.Event, responses_trames_queue : queue.Queue):
-			# logger = logging.getLogger('ResponderThread')
-			# should change logger output
+			'''
+			The thread handling sending back responses when needed.
+			It just wait for data to be available on its queue and
+			send it to the right recipient.
+			'''
+
+			logger.info("[I8TL][ACK] Started responses sending thread.")
 			while not stop_event.is_set():
 				try:
+					# The timeout is here so the loop can check
+					# for `stop_event` event when 
+					# `responses_trames_queue` is empty
 					i8tl = responses_trames_queue.get(timeout=1)
+					logger.info(f"[I8TL][ACK] Sending response to {i8tl['to']}.")
 					i8tl_send_trame(device, i8tl['to'], i8tl['trame'].to_bytes())
 					
 				except queue.Empty:
+					# When timeout expired, nothing to worry about
 					pass
 
+			logger.info("[I8TL][ACK] Stop signal received. Exiting.")
 		@staticmethod
 		def __run(tmp_dir : str, inactive_time_limit : int, stop_event : threading.Event, trame_reception_queue : queue.Queue, assembled_data_queue : queue.Queue, responses_trames_queue : queue.Queue):
+			'''
+				The thread to handle a sender:
+					- Notify responses sending thread for I8*P responses to send
+					- Handle receiving data and order it if needed
+					- Puts a temporary filename when data is received in an accessible queue
+			'''
 			RANGE_0_BURST_MAX_LEN = list(range(0, I8DP_Trame.BURST_MAX_LEN))
 			RANGE_LIMIT_BURST_MAX_LEN = list(range(I8DP_Trame.SequenceGenerator.LIMIT - I8DP_Trame.BURST_MAX_LEN, I8DP_Trame.SequenceGenerator.LIMIT))
 			transmission_in_progress = False
@@ -574,49 +666,64 @@ class DataReceiver(metaclass=Singleton):
 			chunks_to_write : List[bytes] = []
 			should_end : bool = False
 
-			# logger = logging.getLogger(f'DataReceiver@{threading.currentThread().getName()}')
-			# Change logger output
-			logger.info("Starting thread because a message was received.")
+			thread_name_logger = threading.currentThread().getName()
+			logger.info(f"[{thread_name_logger}][I8TL] Starting thread because a message was received.")
+
+			# We don't stop until everything is received. If a transmission
+			# hangs for too long, stopping is handled inside the loop!
 			while not stop_event.is_set() or transmission_in_progress:
 				try:
+					# The timeout is here so the loop can check
+					# for `stop_event` event when the queue is empty
 					data = trame_reception_queue.get(timeout=1)
+
+					# if a message was received the timer is reset
 					elapsed_time_without_trame = 0
 
 					try:
 						protocol_id = get_Protocol_ID(data['data'][0])
 						if   protocol_id == Protocol_ID.I8RP:
-								logger.info("[I8RP] Received request. Answering")
-								responses_trames_queue.put({'trame' : I8RP_Trame(), 'to' : data['from']})
+							# I8RP Requests
+							logger.info(f"[{thread_name_logger}][I8TL][I8RP] Received I8RP request. Answering")
+							responses_trames_queue.put({'trame' : I8RP_Trame(), 'to' : data['from']})
 						elif protocol_id == Protocol_ID.I8TP:
-							logger.info("[I8TP] Received trame.")
+							# I8TP Trames, should only answer to requests with local time
 							i8tp_trame = I8TP_Trame.from_bytes(data['data'])
 							if i8tp_trame.is_req:
-								logger.info("[I8TP] Received request. Answering")
+								logger.info(f"[{thread_name_logger}][I8TL][I8TP] Received I8TP request. Answering")
 								responses_trames_queue.put({'trame' : I8TP_Trame(I8TP_Trame.I8TP_Type.I8TP_TIME_RES), 'to' : data['from']})
+							else:
+								logger.warning(f"[{thread_name_logger}][I8TL][I8TP] Received I8TP response. Ignoring.")
 						elif protocol_id == Protocol_ID.I8DP:
+							# I8DP Trames, the big logic is here!
 							i8dp_trame = I8DP_Trame.from_bytes(data['data'])
 
 							ignore_trame = False
-							# if it's an ack we ignore it
+
+							# I8DP RST Trame -> answer with a RST Trame
+							# unset transmission_in_progress, close an rm
+							# potentially opened file (it is now garbage...)
 							if i8dp_trame.is_rst:
 								transmission_in_progress = False
-								logger.info(f"[I8DP] Received RST Trame. Sending RST back.")
+								logger.info(f"[{thread_name_logger}][I8TL][I8DP] Received RST Trame. Sending RST back.")
 								responses_trames_queue.put({'trame' : I8DP_Trame.rst_trame(), 'to' : data['from']})
+
 								if current_file is not None:
 									current_file.close()
 									remove(current_file.name)
 									current_file = None	
-							
+
+							# If it's an ack it is directly ignored
 							elif  i8dp_trame.is_ack:
-								logger.error(f"[I8DP] Trame received is an ACK. Raw value: {data['data']}")
+								logger.warning(f"[{thread_name_logger}][I8TL][I8DP] Trame received is an ACK. Ignoring.")
 							else:
-								logger.info(f"[I8DP] Received trame {{{i8dp_trame.seq}}}[{ '|'.join((['BEGIN'] if i8dp_trame.begin else []) + (['MF'] if i8dp_trame.more_frag else []) + (['TO_ACK'] if i8dp_trame.needs_ack else []))}]")
+								logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trame received contains data and: {{{i8dp_trame.seq}}}[{ '|'.join((['BEGIN'] if i8dp_trame.begin else []) + (['MF'] if i8dp_trame.more_frag else []) + (['TO_ACK'] if i8dp_trame.needs_ack else []))}]")
 								if i8dp_trame.begin:
 									if transmission_in_progress:
-										logger.info("[I8DP] Ignored because transmission is already in progress.")
+										logger.warning(f"[{thread_name_logger}][I8TL][I8DP] Trame with BEGIN received while transmission is already in progress. Ignoring.")
 										ignore_trame = True
 									else:
-										logger.info("[I8DP] Beggining a transmission")
+										logger.info(f"[{thread_name_logger}][I8TL][I8DP] Beggining a transmission.")
 										transmission_in_progress = True
 										expected_seq = i8dp_trame.seq
 										fragment_burst = []
@@ -626,56 +733,65 @@ class DataReceiver(metaclass=Singleton):
 
 										# this shouldn't happen ...
 										if current_file is not None:
+											logger.error(f"[{thread_name_logger}][I8TL][I8DP] File was not closed in previous transmission. Content lost.")
 											current_file.close()
 											remove(current_file.name)
 										
 										current_filename = tmp_dir + str(time_ns()) + '-' + data['from'].address.hex() + '-' + i8dp_trame.data.hex()[-8:] + ".bin"
 										current_file = open(current_filename, 'wb')
 
-								# To make things easy, if the first one is lost we ignore the rest
-								# Because it could cause
+								# To make things easy, if the first one is lost  the rest is ignored
 								if not transmission_in_progress:
-									logger.info("[I8DP] Ignored because no trame with BEGIN flag was received.")
+									logger.warning(f"[{thread_name_logger}][I8TL][I8DP] Trame received while transmission NOT in progress. Ignoring.")
 									ignore_trame = True
 								elif i8dp_trame.seq < expected_seq or (expected_seq in RANGE_0_BURST_MAX_LEN and i8dp_trame.seq in RANGE_LIMIT_BURST_MAX_LEN):
-									logger.info(f"[I8DP] Ignored because sequence number is smaller than expected ({i8dp_trame.seq} < {expected_seq}).")
+									# Check if sequence number is in sequence:
+									# it has to be bigger or equal than expected_seq
+									# or lower if edge case when sequence number goes
+									# back to zero
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trame with sequence number is smaller than expected (or not in range): {i8dp_trame.seq} < {expected_seq}. Ignoring.")
 									ignore_trame = True
-								#  elif (i8dp_trame.seq >= (expected_seq + I8DP_Trame.BURST_MAX_LEN)%I8DP_Trame.SequenceGenerator.LIMIT) !=   (i8dp_trame.seq <=  expected_seq - I8DP_Trame.BURST_MAX_LEN):
-								#  	logger.info(f"[I8DP] Ignored because sequence number is not in burst ({i8dp_trame.seq} ]{expected_seq - I8DP_Trame.BURST_MAX_LEN},{expected_seq + I8DP_Trame.BURST_MAX_LEN}[).")
-								#  	ignore_trame = True
+						
 
+								# After that, if the trame shouldn't be ignored
+								# It is sort-inserted into a buffer list
+								# and seq number is added to list of ack to send
 								if not ignore_trame and i8dp_trame not in fragment_burst:
 									bisect.insort(fragment_burst, i8dp_trame)
-									# fragment_burst.append(i8dp_trame)
 									seq_ack_list.append(i8dp_trame.seq)
-								# seq_list = [frag.seq for frag in fragment_burst]  
-								# logger.error(f"seq_list [before]: {seq_list}")
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trame {i8dp_trame.seq} is inserted into buffer.")
+									
+
 								if transmission_in_progress and i8dp_trame.needs_ack:
 									# When it's a packet that needs ack we send it with all the previous ones
-									logger.info(f"[I8DP] Trame {i8dp_trame.seq} needs ACK, sending it for {seq_ack_list}.")
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trame {i8dp_trame.seq} needs ACK, sending it for {seq_ack_list}.")
 									responses_trames_queue.put({'trame' : I8DP_Trame.ack_trame(i8dp_trame.seq, seq_ack_list), 'to' : data['from']})
 									seq_ack_list = []
 
+								# While stored trames are in sequence, we put them in a temporary list to be
+								# written in a temporary file
 								while not ignore_trame and (fragment_burst and fragment_burst[0] == expected_seq):
-									logger.info(f"[I8DP] Writing trame {fragment_burst[0].seq} data to temporary storage.")
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trame {fragment_burst[0].seq} will be stored.")
 									chunks_to_write.append(fragment_burst.pop(0).data)
-									# seq_list.pop(0)
 									expected_seq = (expected_seq + 1)%I8DP_Trame.SequenceGenerator.LIMIT
 									
-								logger.info(f"[I8DP] Next trame should be {expected_seq}.")
-								logger.info(f"[I8DP] {[_.seq for _ in fragment_burst]} trames remain.")	
 								if current_file is not None:
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Temporary list is writtent to disk.")
 									current_file.write(b''.join(chunks_to_write))
 									chunks_to_write = []
-									# 	logger.error(f"seq_list [after ]: {seq_list}")
 									
 
+								logger.info(f"[{thread_name_logger}][I8TL][I8DP] Trames {[_.seq for _ in fragment_burst]} can't be stored yet.")	
+								logger.info(f"[{thread_name_logger}][I8TL][I8DP] Next received trame should be {expected_seq}.")
 								
+								# The value is kept in case of retransmissions
 								if not i8dp_trame.more_frag:
 									should_end = True
 
+								# If everything was correctly received the transmission can
+								# end. Filename can be put in the queue for the receiver.
 								if not ignore_trame and should_end and not fragment_burst:
-									logger.info("[I8DP] Ending transmission.")
+									logger.info(f"[{thread_name_logger}][I8TL][I8DP] Ending transmission.")
 									if current_file is not None:
 										current_file.close()
 										current_file = None
@@ -683,39 +799,18 @@ class DataReceiver(metaclass=Singleton):
 									transmission_in_progress = False
 									assembled_data_queue.put(current_filename)
 					except ValueError:
-						# Invalid protocolID, pass
-						pass
+						logger.error(f"[{thread_name_logger}][I8TL] Invalid Protocol_ID received: {data['data'][0]}.")	
+						
 				except queue.Empty:
+					# Handle the thread timeout
 					elapsed_time_without_trame += 1
 					if elapsed_time_without_trame >= inactive_time_limit:
-						logger.info(f"Thread timeout. Exiting until next message.")
+						logger.info(f"[{thread_name_logger}][I8TL] Thread timeout. Exiting until next message.")
 						if current_file is not None:
 							current_file.close()
 						break
 
 
-		def notify_trame(self,  trame : dict) -> None:
-			sender = trame['from']
-			with self._notify_lock:
-				if sender not in self._threads or not self._threads[sender].is_alive():
-					self._thread_trame_reception_queues[sender] = queue.Queue()
-					self._thread_stop_events[sender] = threading.Event()
-					self._threads[sender] = threading.Thread(target=DataReceiver.ReceiverThreadPool.__run, args=(self._tmp_dir, self._inactive_time_limit, self._thread_stop_events[sender], self._thread_trame_reception_queues[sender], self._assembled_data_queue, self._responses_trames_queue))
-					self._threads[sender].name = f'Thread-{sender}'
-					self._threads[sender].start()
-
-				self._thread_trame_reception_queues[sender].put(trame)
-			
-
-		def stop(self):
-			for an_event in self._thread_stop_events.values():
-				an_event.set()
-
-			for a_thread in self._threads.values():
-				a_thread.join()
-
-			self._ack_thread_stop_event.set()
-			self._ack_thread.join()
 
 
 	__slots__ = ('_process', '_device', '_queue', '_stop_event', 
@@ -733,46 +828,78 @@ class DataReceiver(metaclass=Singleton):
 		base_log_level             : int  = logging.NOTSET):
 
 
-
+		# Create log dir if it does not exists
 		self._log_dir = log_dir + '/' 
 		Path(self._log_dir).mkdir(parents=True, exist_ok=True)
 		
 		_prepare_logger(base_log_level, self._log_dir, 'datareceiver')
 
+		# Create tmp dir if it does not exists
 		self._tmp_dir = tmp_dir + '/' 
 		Path(self._tmp_dir).mkdir(parents=True, exist_ok=True)
 
 		self._del_dir = del_dir
 
-		
 		self._queue      : multiprocessing.Queue             = multiprocessing.Queue()
 		self._stop_event : multiprocessing.synchronize.Event = multiprocessing.Event()
 		
 		if self_stop:
 			atexit.register(self.stop)
 
+		# Start the receiving process
 		self._thread_inactive_time_limit = thread_inactive_time_limit
 		self._process = multiprocessing.Process(target=self.__run, args=(path, speed))
 		self._process.start()
 
+	def get_data_filename(self) -> str:
+		'''
+		Waits for data to be fully received and
+		returns a filename that can be used to
+		access data.
+
+		The file should be deleted after usage.
+		'''
+		return self._queue.get()
+
+	def stop(self) -> None:
+		'''
+		Notify the process to stop and wait for it
+		to do it.
+		'''
+		logger.info("[I8TL] Exiting. Waiting for DataReceiver process to stop.")
+		self._stop_event.set()
+		self._process.join()
 
 	def _init_device(self,  path: str, speed: int):	
+		'''
+		Open the XBeeDevice
+		'''
 		self._device = XBeeDevice(path, speed)
 		self._device.open()
 		self._device.set_sync_ops_timeout(None)
 		
-		logger.info(f'Own device 16 bits address: {self._device.get_16bit_addr()}')
-		logger.info(f'Own device 64 bits address: {self._device.get_64bit_addr()}')
-
-
-	def stop(self) -> None:
-		logger.info("Stopping DataReceiver process")
-		self._stop_event.set()
-		self._process.join()
-
+		logger.info(f'[I8TL] Local 16 bits address: {self._device.get_16bit_addr()}')
+		logger.info(f'[I8TL] Local 64 bits address: {self._device.get_64bit_addr()}')
 	
 	def __run(self, path : str, speed : int):	
+		'''
+		Starting point of the internal subprocess.
+
+		It sets up the device, the thread pool handling
+		messages, and a callback to send data to this 
+		pool.
+
+		'''
 		def __packet_received_callback(packet):
+			'''
+			A callback to handles received packet. It is not
+			a 'data received' callback but a 'packet received'
+			in order to obtain rssi.
+
+			It justs dispatch packet data, source and rssi to
+			the thread pool.
+
+			'''
 			if (packet.get_frame_type() in (ApiFrameType.RX_64, ApiFrameType.RX_16, ApiFrameType.RECEIVE_PACKET)) and hasattr(packet, 'rf_data') and hasattr(packet, 'x64bit_source_addr'):
 				rssi = None
 				if hasattr(packet, 'rssi'):
@@ -780,30 +907,30 @@ class DataReceiver(metaclass=Singleton):
 				pool.notify_trame({'from' : packet.x64bit_source_addr, 'data' : packet.rf_data, 'rssi' : rssi})
 		
 		if multiprocessing.parent_process() is None:
-			logger.error("Tried to call run() method from main process.")
+			logger.error("[I8TL] Tried to call DataReceiver's run method from main process.")
 			return
 		
 		self._init_device(path=path, speed=speed)
-		signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+		# SIGINT is disabled to handle termination in a proper way
+		signal.signal(signal.SIGINT, signal.SIG_IGN)
 		self._device.add_packet_received_callback(__packet_received_callback)
 
-		logger.info("DataReceiver process created")
-
+		logger.info("[I8TL] DataReceiver process created")
 		pool = DataReceiver.ReceiverThreadPool(self._device, self._queue, self._tmp_dir, self._thread_inactive_time_limit)
 		
+
+		# When _stop_event is set, process is exiting
+		# and `pool` is stopped
 		self._stop_event.wait()
 		pool.stop()
 
 		self._device.del_packet_received_callback(__packet_received_callback)
-		logger.info("DataSender process exiting")
+		logger.info("[I8TL] DataReceiver process exiting")
 		
+		# Cleaning up data and device when exiting
 		if self._del_dir:
-			logger.info("Removing temporary files")
+			logger.info(f"[I8TL] Recursively removing temporary folder and files (in {self._tmp_dir})")
 			rmtree(self._tmp_dir, ignore_errors=True)
 
 		self._device.close()
-
-
-	def get_data_filename(self) -> str:
-		return self._queue.get()

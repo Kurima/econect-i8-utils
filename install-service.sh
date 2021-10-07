@@ -31,16 +31,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ${delete}; then
-	sudo systemctl stop i8-forwarder.service
-	sudo systemctl disable i8-forwarder.service
-	sudo rm /etc/systemd/system/i8-forwarder.service
+	sudo systemctl stop i8-forwarder@*.service
+	sudo systemctl --now disable i8-forwarder@*.service
+	sudo rm /etc/systemd/system/i8-forwarder@.service
+	sudo rm /etc/udev/rules.d/99-xbee-serial.rules
 
 	sudo userdel -r i8utils
 else
 	sudo useradd -m i8utils
-	sudo cp -r src/* /home/i8utils
-	sudo cp i8-forwarder.service /etc/systemd/system/
+	sudo usermod -a -G dialout i8utils
 
-	sudo systemctl enable i8-forwarder.service
-	sudo systemctl start i8-forwarder.service
+	sudo cp -r src/* /home/i8utils
+	sudo cp i8-forwarder@.service /etc/systemd/system/
+	sudo cp 99-xbee-serial.rules /etc/udev/rules.d/
+	sudo chown -R i8utils:i8utils /home/i8utils
+
+	sudo systemctl enable i8-forwarder@.service
 fi
