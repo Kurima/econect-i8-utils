@@ -23,6 +23,7 @@ from sys import argv
 from typing import cast
 
 import requests
+import time
 
 from config import LOG_DIR, SERVER_URL
 from econect.protocol.I8TL import DataReceiver
@@ -48,11 +49,19 @@ if __name__ == '__main__':
 			filename = dr.get_data_filename()
 			with open(filename, 'rb') as file:
 				with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-					r = requests.post(SERVER_URL, 
-						data=cast(bytes,mm), 
-						headers={"Content-Type": "application/octet-stream"},
-						timeout=5)
-					print(f'[{r.status_code}] {r.content.decode("utf-8")}')
+					done = False:
+					while not done:
+						try:
+							r = requests.post(SERVER_URL, 
+								data=cast(bytes,mm), 
+								headers={"Content-Type": "application/octet-stream"},
+								timeout=5)
+							print(f'[{r.status_code}] {r.content.decode("utf-8")}')
+							done = True
+						except requests.exceptions.RequestException as re:
+							print(f"Couldn't send {filename} to {SERVER_URL}")
+							print(re)
+							time.sleep(10)
 			os.remove(filename)
 	except KeyboardInterrupt:
 		exit(0)

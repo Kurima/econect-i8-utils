@@ -11,7 +11,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="econect-i8-utils-kurima",
-    version="0.9.3",
+    version="0.9.5",
     author="Malik Irain",
     author_email="malik.irain@irit.fr",
     description="A communication suite to allow transfert of large size data using IEEE 802.15.4 with a few examples.",
@@ -28,6 +28,6 @@ setuptools.setup(
     ],
     package_dir={"": "src"},
     packages=setuptools.find_packages(where="src"),
-    python_requires=">=3.6",
+    python_requires=">=3.8",
     install_requires=requirements
 )

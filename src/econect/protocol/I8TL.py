@@ -201,7 +201,7 @@ class DataSender(metaclass=Singleton):
 	__slots__ = ('_process', '_device', '_coord_addr', '_queue', 
 		'_stop_event', '_xbee_init_event', '_tmp_dir', '_log_dir',
 		'_del_dir', '_retries', '_response_timeout','_timestamp_delta',
-		'_delta_lifetime', '_trame_counter')
+		'_delta_lifetime', '_trame_counter', '_benchmark')
 
 	def __init__(self, 
 		path             : str              = '/dev/ttyUSB0',
@@ -214,13 +214,17 @@ class DataSender(metaclass=Singleton):
 		self_stop        : bool             = False,
 		response_timeout : int              = 3,
 		qos_info         : bool             = False,
-		base_log_level   : int              = logging.NOTSET):
+		base_log_level   : int              = logging.NOTSET,
+		benchmark        : bool             = False):
 		
 
 		# Create log dir if it does not exists
 		self._log_dir = log_dir + '/' 
 		Path(self._log_dir).mkdir(parents=True, exist_ok=True)
 
+		self._benchmark = benchmark
+		if benchmark:
+			base_log_level = 1000
 		_prepare_logger(base_log_level, self._log_dir, 'datasender')
 		
 
@@ -289,7 +293,8 @@ class DataSender(metaclass=Singleton):
 		'''
 		self._xbee_init_event.wait()
 
-		new_filename = self._tmp_dir + str(time_ns()) + '-' + basename(filename) + ".bin"
+		import random
+		new_filename = self._tmp_dir + str(time_ns()) + '-' + str(random.randint(0,1000))+ basename(filename) + ".bin"
 
 		with F8Wrapper(filename, 'rb') as fsrc, open(new_filename, 'wb') as fdst:
 			copyfileobj(fsrc, fdst)
@@ -513,8 +518,16 @@ class DataSender(metaclass=Singleton):
 				logger.info(f'[I8TL] Trying to send {filename}')
 						
 				with open(filename, 'rb') as file:
-					file_sent = self._send_file(file)	
-				
+					if self._benchmark:
+						before = time.time_ns()
+						file_sent = self._send_file(file)
+						after = time.time_ns()
+						if file_sent:
+							print(f"{filename}: {fstat(file.fileno()).st_size/1024} kB in {(after - before)*1e-9}s ({(fstat(file.fileno()).st_size/1024)/((after - before)*1e-9)} kB/s)")
+						else:
+							print(f"Couldn't send {filename}, will retry.")
+					else:
+						file_sent = self._send_file(file)
 				# When a file is sent, we remove it's temporary version
 				# otherwise we will try to send it again later ...
 				if file_sent:	

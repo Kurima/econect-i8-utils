@@ -18,7 +18,6 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-
 class TrameCounter(ABC):
 	__slots__ = ()
 
@@ -42,10 +41,10 @@ class FileTrameCounter(TrameCounter):
 		self._file.write(f'{time.time_ns()},{val}\n')
 
 	def inc_send(self):
-		self._write_line(0)
+		self._write_line('T')
 
 	def inc_retrans(self):
-		self._write_line(1)
+		self._write_line('R')
 
 	def __del__(self):
 		self._file.close()

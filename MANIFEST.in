@@ -4,3 +4,4 @@ include requirements.txt
 include xctu-profiles/*
 include i8-forwarder@.service
 include install-service.sh
+include 99-xbee-serial.rules

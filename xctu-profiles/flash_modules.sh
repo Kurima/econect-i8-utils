@@ -67,4 +67,4 @@ then
 fi
 
 
-XCTUcmd load_profile -f ${profile} -p ${devfile} -b ${speed} -v
+XCTUcmd load_profile -f ${profile} -p ${devfile} -b ${speed} -v -F
