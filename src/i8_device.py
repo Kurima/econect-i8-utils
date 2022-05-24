@@ -19,6 +19,7 @@
 
 from sys import argv, exit
 from time import sleep
+from typing import Final
 
 from config import EXAMPLES_DIR, EXAMPLES_FILES, LOG_DIR
 from econect.formats import NeoCayenneLPP

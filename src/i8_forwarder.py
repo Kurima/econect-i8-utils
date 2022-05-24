@@ -49,7 +49,7 @@ if __name__ == '__main__':
 			filename = dr.get_data_filename()
 			with open(filename, 'rb') as file:
 				with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-					done = False:
+					done = False
 					while not done:
 						try:
 							r = requests.post(SERVER_URL, 
